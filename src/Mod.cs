@@ -64,6 +64,8 @@ namespace RemoteWarpConduit
         private void Update()
         {
             if (Client == null) return;
+            senders.RemoveAll(sender => sender == null);
+            receivers.RemoveAll(receiver => receiver == null);
             JObject message;
             while (Client.TryReceive(out message))
             {

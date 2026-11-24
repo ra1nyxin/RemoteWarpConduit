@@ -107,6 +107,12 @@ namespace RemoteWarpConduit
             base.OnCleanUp();
         }
 
+        protected override void OnLoadLevel()
+        {
+            RemoteRuntime.UnregisterSender(this);
+            base.OnLoadLevel();
+        }
+
         private void RefreshMenu(object unused)
         {
             RemoteRuntime runtime = RemoteRuntime.Instance;
@@ -201,7 +207,7 @@ namespace RemoteWarpConduit
         private bool TryStage(Storage storage)
         {
             if (storage == null) return false;
-            foreach (GameObject item in storage.items)
+            foreach (GameObject item in storage.items.ToArray())
             {
                 ElementPacket packet;
                 if (!ElementCodec.TryCapture(item, targetWorld, targetReceiver, out packet)) continue;
@@ -250,6 +256,9 @@ namespace RemoteWarpConduit
         [SerializeField] internal SolidConduitDispenser solidDispenser;
         [Serialize] private List<string> applied = new List<string>();
         private HashSet<string> durable = new HashSet<string>();
+        private HashSet<string> appliedLookup = new HashSet<string>();
+        private const int MaxUnconfirmed = 256;
+        private const int MaxAckPerPoll = 32;
         private float nextPoll;
 
         protected override void OnSpawn()
@@ -259,6 +268,7 @@ namespace RemoteWarpConduit
             liquidDispenser.storage = liquid;
             solidDispenser.storage = solid;
             durable = new HashSet<string>(applied);
+            appliedLookup = new HashSet<string>(applied);
             RemoteRuntime.RegisterReceiver(this);
         }
 
@@ -266,6 +276,12 @@ namespace RemoteWarpConduit
         {
             RemoteRuntime.UnregisterReceiver(this);
             base.OnCleanUp();
+        }
+
+        protected override void OnLoadLevel()
+        {
+            RemoteRuntime.UnregisterReceiver(this);
+            base.OnLoadLevel();
         }
 
         internal string WorldId { get { return SaveLoader.Instance.GameInfo.colonyGuid.ToString("D"); } }
@@ -276,8 +292,13 @@ namespace RemoteWarpConduit
             if (client == null || !client.Connected || Time.timeScale <= 0f || !GetComponent<Activatable>().IsActivated) return;
             if (Time.unscaledTime < nextPoll) return;
             nextPoll = Time.unscaledTime + 3f;
+            int sent = 0;
             foreach (string id in durable)
+            {
                 client.Send(new JObject { ["type"] = "ack", ["delivery_id"] = id });
+                if (++sent >= MaxAckPerPoll) break;
+            }
+            if (applied.Count >= MaxUnconfirmed) return;
             foreach (string phase in new[] { "gas", "liquid", "solid" })
                 client.Send(new JObject { ["type"] = "pending", ["world_id"] = WorldId,
                     ["receiver_id"] = ReceiverId, ["phase"] = phase, ["exclude"] = new JArray(applied) });
@@ -285,7 +306,7 @@ namespace RemoteWarpConduit
 
         internal void Receive(string id, ElementPacket packet)
         {
-            if (Time.timeScale <= 0f || !GetComponent<Activatable>().IsActivated || applied.Contains(id)) return;
+            if (Time.timeScale <= 0f || !GetComponent<Activatable>().IsActivated || applied.Count >= MaxUnconfirmed || appliedLookup.Contains(id)) return;
             if (packet.WorldId != WorldId || packet.ReceiverId != ReceiverId) return;
             SimHashes element;
             byte disease;
@@ -294,6 +315,7 @@ namespace RemoteWarpConduit
             if (buffer == null || buffer.RemainingCapacity() < packet.Mass) return;
             buffer.AddElement(element, packet.Mass, packet.Temperature, disease, packet.DiseaseCount, false, false);
             applied.Add(id);
+            appliedLookup.Add(id);
         }
 
         internal void Saved()
@@ -304,7 +326,7 @@ namespace RemoteWarpConduit
 
         internal void Acknowledged(string id)
         {
-            if (durable.Remove(id)) applied.Remove(id);
+            if (durable.Remove(id)) { applied.Remove(id); appliedLookup.Remove(id); }
         }
     }
 

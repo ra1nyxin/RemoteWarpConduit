@@ -99,6 +99,18 @@ class RelayTest(unittest.IsolatedAsyncioTestCase):
         pending = await self.call(b, bw, {'type': 'pending', 'world_id': 'world', 'receiver_id': 'port', 'phase': 'gas'})
         self.assertEqual(pending['deliveries'][0]['id'], 'two')
 
+    async def test_pending_scans_past_multiple_unmatched_rows(self):
+        a, aw = await self.client('sender')
+        b, bw = await self.client('receiver')
+        for delivery_id, world, port, phase in [
+            ('one', 'other', 'port', 'gas'), ('two', 'world', 'other', 'gas'),
+            ('three', 'world', 'port', 'liquid'), ('four', 'world', 'port', 'gas')]:
+            result = await self.call(a, aw, {'type': 'send', 'delivery_id': delivery_id, 'target': 'receiver',
+                'payload': {'world_id': world, 'receiver_id': port, 'phase': phase}})
+            self.assertTrue(result['ok'])
+        result = await self.call(b, bw, {'type': 'pending', 'world_id': 'world', 'receiver_id': 'port', 'phase': 'gas'})
+        self.assertEqual([item['id'] for item in result['deliveries']], ['four'])
+
 
 if __name__ == '__main__':
     unittest.main()
