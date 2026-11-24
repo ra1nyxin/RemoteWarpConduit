@@ -259,7 +259,10 @@ namespace RemoteWarpConduit
         private HashSet<string> appliedLookup = new HashSet<string>();
         private const int MaxUnconfirmed = 256;
         private const int MaxAckPerPoll = 32;
+        private const float CargoPollInterval = 0.25f;
+        private const float AckRetryInterval = 3f;
         private float nextPoll;
+        private float nextAck;
 
         protected override void OnSpawn()
         {
@@ -290,14 +293,18 @@ namespace RemoteWarpConduit
         internal void Tick(RelayClient client)
         {
             if (client == null || !client.Connected || Time.timeScale <= 0f || !GetComponent<Activatable>().IsActivated) return;
-            if (Time.unscaledTime < nextPoll) return;
-            nextPoll = Time.unscaledTime + 3f;
-            int sent = 0;
-            foreach (string id in durable)
+            if (Time.unscaledTime >= nextAck)
             {
-                client.Send(new JObject { ["type"] = "ack", ["delivery_id"] = id });
-                if (++sent >= MaxAckPerPoll) break;
+                nextAck = Time.unscaledTime + AckRetryInterval;
+                int sent = 0;
+                foreach (string id in durable)
+                {
+                    client.Send(new JObject { ["type"] = "ack", ["delivery_id"] = id });
+                    if (++sent >= MaxAckPerPoll) break;
+                }
             }
+            if (Time.unscaledTime < nextPoll) return;
+            nextPoll = Time.unscaledTime + CargoPollInterval;
             if (applied.Count >= MaxUnconfirmed) return;
             foreach (string phase in new[] { "gas", "liquid", "solid" })
                 client.Send(new JObject { ["type"] = "pending", ["world_id"] = WorldId,
@@ -321,7 +328,7 @@ namespace RemoteWarpConduit
         internal void Saved()
         {
             foreach (string id in applied) durable.Add(id);
-            nextPoll = 0f;
+            nextAck = 0f;
         }
 
         internal void Acknowledged(string id)
