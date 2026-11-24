@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <OniManagedDir>D:\Steam\steamapps\common\OxygenNotIncluded\OxygenNotIncluded_Data\Managed</OniManagedDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="RelayClientTests.cs" />
+    <Compile Include="..\src\RelayClient.cs" />
+    <Compile Include="..\src\ElementPacket.cs" />
+    <Reference Include="Newtonsoft.Json"><HintPath>$(OniManagedDir)\Newtonsoft.Json.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>
