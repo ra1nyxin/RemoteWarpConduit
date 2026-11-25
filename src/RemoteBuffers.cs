@@ -259,7 +259,7 @@ namespace RemoteWarpConduit
         private HashSet<string> appliedLookup = new HashSet<string>();
         private const int MaxUnconfirmed = 256;
         private const int MaxAckPerPoll = 32;
-        private const float CargoPollInterval = 0.25f;
+        private const float CargoPollInterval = 1f;
         private const float AckRetryInterval = 3f;
         private float nextPoll;
         private float nextAck;
