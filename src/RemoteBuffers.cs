@@ -263,6 +263,27 @@ namespace RemoteWarpConduit
         private const float AckRetryInterval = 3f;
         private float nextPoll;
         private float nextAck;
+        private HashSet<string> clearing = new HashSet<string>();
+        private float clearUntil;
+
+        internal int AwaitingSave { get { return applied.Count; } }
+        internal JArray ClearableIds(JArray ids)
+        {
+            JArray result = new JArray();
+            foreach (JToken token in ids)
+            {
+                string id = (string)token;
+                if (!appliedLookup.Contains(id)) result.Add(id);
+            }
+            return result;
+        }
+        internal void BeginClear(JArray ids)
+        {
+            clearing.Clear();
+            foreach (JToken token in ids) clearing.Add((string)token);
+            clearUntil = Time.unscaledTime + 20f;
+        }
+        internal void FinishClear() { clearing.Clear(); }
 
         protected override void OnSpawn()
         {
@@ -292,6 +313,7 @@ namespace RemoteWarpConduit
 
         internal void Tick(RelayClient client)
         {
+            if (client == null || !client.Connected || Time.unscaledTime >= clearUntil) clearing.Clear();
             if (client == null || !client.Connected || Time.timeScale <= 0f || !GetComponent<Activatable>().IsActivated) return;
             if (Time.unscaledTime >= nextAck)
             {
@@ -313,7 +335,7 @@ namespace RemoteWarpConduit
 
         internal void Receive(string id, ElementPacket packet)
         {
-            if (Time.timeScale <= 0f || !GetComponent<Activatable>().IsActivated || applied.Count >= MaxUnconfirmed || appliedLookup.Contains(id)) return;
+            if (Time.timeScale <= 0f || !GetComponent<Activatable>().IsActivated || applied.Count >= MaxUnconfirmed || appliedLookup.Contains(id) || clearing.Contains(id)) return;
             if (packet.WorldId != WorldId || packet.ReceiverId != ReceiverId) return;
             SimHashes element;
             byte disease;

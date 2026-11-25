@@ -4,8 +4,10 @@ import argparse
 import asyncio
 import json
 import logging
+from logging.handlers import TimedRotatingFileHandler
 import sqlite3
 import time
+from datetime import date, timedelta
 from pathlib import Path
 
 PORT = 53573
@@ -13,6 +15,25 @@ MAX_LINE = 1024 * 1024
 MAX_PENDING = 1000
 TIMEOUT = 300
 LOG = logging.getLogger("remote-warp")
+
+
+def clean_old_logs(path):
+    cutoff = date.today() - timedelta(days=6)
+    for candidate in path.parent.glob(path.name + ".????-??-??"):
+        try:
+            day = date.fromisoformat(candidate.name[-10:])
+            if day < cutoff:
+                candidate.unlink()
+        except (ValueError, OSError):
+            LOG.exception("could not clean log %s", candidate)
+
+
+async def log_maintenance(path, handler):
+    while True:
+        if time.time() >= handler.rolloverAt:
+            handler.doRollover()
+        clean_old_logs(path)
+        await asyncio.sleep(3600)
 
 
 class Relay:
@@ -144,6 +165,35 @@ class Relay:
                             deliveries.append({"id": delivery_id, "sender": sender, "payload": payload})
                             break
                     await self.send(writer, {"type": "pending", "deliveries": deliveries})
+                elif kind in ("queue_status", "queue_clear"):
+                    world_id = self.field(message, "world_id")
+                    receiver_id = self.field(message, "receiver_id")
+                    role = self.field(message, "role")
+                    if role not in ("sender", "receiver"):
+                        raise ValueError("invalid role")
+                    target = self.field(message, "target") if role == "sender" else client_id
+                    rows = self.db.execute("SELECT id,sender,payload FROM deliveries WHERE target=? AND delivered IS NULL ORDER BY created", (target,)).fetchall()
+                    matches = []
+                    for delivery_id, sender, encoded in rows:
+                        payload = json.loads(encoded)
+                        if (role == "receiver" or sender == client_id) and payload.get("world_id") == world_id and payload.get("receiver_id") == receiver_id:
+                            matches.append((delivery_id, payload.get("phase")))
+                    result = {"type": kind, "role": role, "target": target, "world_id": world_id, "receiver_id": receiver_id}
+                    if kind == "queue_status":
+                        result["ids"] = [item[0] for item in matches]
+                        result["counts"] = {phase: sum(p == phase for _, p in matches) for phase in ("gas", "liquid", "solid")}
+                        result["total"] = len(matches)
+                    else:
+                        ids = message.get("ids")
+                        if not isinstance(ids, list) or len(ids) > MAX_PENDING or any(not isinstance(i, str) or len(i) > 256 for i in ids):
+                            raise ValueError("invalid clear ids")
+                        requested = set(ids)
+                        selected = [item[0] for item in matches if item[0] in requested]
+                        self.db.executemany("UPDATE deliveries SET delivered=? WHERE id=? AND delivered IS NULL", [(time.time(), i) for i in selected])
+                        self.db.commit()
+                        result["cleared"] = len(selected)
+                        LOG.info("queue cleared by=%s role=%s target=%s world=%s receiver=%s count=%s", client_id, role, target, world_id, receiver_id, len(selected))
+                    await self.send(writer, result)
                 elif kind == "ack":
                     delivery_id = self.field(message, "delivery_id")
                     row = self.db.execute("SELECT delivered FROM deliveries WHERE id=? AND target=?", (delivery_id, client_id)).fetchone()
@@ -178,7 +228,14 @@ async def main():
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=PORT)
     parser.add_argument("--database", default=str(Path(__file__).resolve().with_name("remote_warp.sqlite3")))
+    parser.add_argument("--log", default=str(Path(__file__).resolve().with_name("remote_warp_relay.log")))
     args = parser.parse_args()
+    log_path = Path(args.log).resolve()
+    handler = TimedRotatingFileHandler(log_path, when="midnight", interval=1, backupCount=6, encoding="utf-8", delay=True)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logging.getLogger().addHandler(handler)
+    clean_old_logs(log_path)
+    asyncio.create_task(log_maintenance(log_path, handler))
     relay = Relay(args.database)
     server = await asyncio.start_server(relay.handle, args.host, args.port, limit=MAX_LINE)
     LOG.info("listening on %s:%s database=%s", args.host, args.port, args.database)

@@ -2,8 +2,9 @@ import asyncio
 import json
 import tempfile
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
-from relay import Relay
+from relay import Relay, clean_old_logs
 
 
 class RelayTest(unittest.IsolatedAsyncioTestCase):
@@ -110,6 +111,46 @@ class RelayTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(result['ok'])
         result = await self.call(b, bw, {'type': 'pending', 'world_id': 'world', 'receiver_id': 'port', 'phase': 'gas'})
         self.assertEqual([item['id'] for item in result['deliveries']], ['four'])
+
+    async def test_queue_clear_scoped_and_idempotent(self):
+        a, aw = await self.client('sender')
+        b, bw = await self.client('receiver')
+        c, cw = await self.client('other')
+        def send(delivery_id, world, port, phase):
+            return {'type': 'send', 'delivery_id': delivery_id, 'target': 'receiver',
+                    'payload': {'world_id': world, 'receiver_id': port, 'phase': phase}}
+        one = send('one', 'world', 'port', 'liquid')
+        await self.call(a, aw, one)
+        await self.call(a, aw, send('two', 'world', 'other-port', 'gas'))
+        await self.call(c, cw, send('three', 'world', 'port', 'gas'))
+        query = {'type': 'queue_status', 'role': 'sender', 'target': 'receiver', 'world_id': 'world', 'receiver_id': 'port'}
+        status = await self.call(a, aw, query)
+        self.assertEqual(status['ids'], ['one'])
+        self.assertEqual(status['counts']['liquid'], 1)
+        clear = dict(query, type='queue_clear', ids=['one', 'two', 'three'])
+        self.assertEqual((await self.call(a, aw, clear))['cleared'], 1)
+        self.assertTrue((await self.call(a, aw, one))['ok'])
+        receiver_query = {'type': 'queue_status', 'role': 'receiver', 'world_id': 'world', 'receiver_id': 'port'}
+        self.assertEqual((await self.call(b, bw, receiver_query))['ids'], ['three'])
+        self.assertEqual((await self.call(b, bw, dict(receiver_query, type='queue_clear', ids=['three'])))['cleared'], 1)
+        self.assertEqual((await self.call(b, bw, receiver_query))['total'], 0)
+        self.assertEqual(self.relay.db.execute('SELECT COUNT(*) FROM deliveries WHERE delivered IS NULL').fetchone()[0], 1)
+
+
+class LogRetentionTest(unittest.TestCase):
+    def test_only_old_dated_logs_are_removed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'relay.log'
+            recent = path.with_name(path.name + '.' + (date.today() - timedelta(days=6)).isoformat())
+            old = path.with_name(path.name + '.' + (date.today() - timedelta(days=7)).isoformat())
+            unrelated = path.with_name('other.log.2000-01-01')
+            for item in (path, recent, old, unrelated):
+                item.touch()
+            clean_old_logs(path)
+            self.assertTrue(path.exists())
+            self.assertTrue(recent.exists())
+            self.assertFalse(old.exists())
+            self.assertTrue(unrelated.exists())
 
 
 if __name__ == '__main__':

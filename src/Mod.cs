@@ -38,6 +38,8 @@ namespace RemoteWarpConduit
         internal static void UnregisterReceiver(RemoteReceiverBuffers receiver) { receivers.Remove(receiver); }
         internal RelayClient Client { get; private set; }
         internal JArray Peers { get; private set; } = new JArray();
+        internal JObject QueueStatus { get; private set; }
+        internal JObject QueueClearResult { get; private set; }
         private float nextRefresh;
 
         private void Awake()
@@ -71,6 +73,15 @@ namespace RemoteWarpConduit
             {
                 if ((string)message["type"] == "clients" && message["clients"] is JArray)
                     Peers = (JArray)message["clients"];
+                else if ((string)message["type"] == "queue_status") QueueStatus = message;
+                else if ((string)message["type"] == "queue_clear")
+                {
+                    QueueClearResult = message;
+                    QueueStatus = null;
+                    foreach (RemoteReceiverBuffers receiver in receivers)
+                        if ((string)message["role"] == "receiver" && (string)message["world_id"] == receiver.WorldId && (string)message["receiver_id"] == receiver.ReceiverId)
+                            receiver.FinishClear();
+                }
                 else if ((string)message["type"] == "send")
                     foreach (RemoteSenderBuffers sender in senders)
                         sender.HandleSendResult(message);

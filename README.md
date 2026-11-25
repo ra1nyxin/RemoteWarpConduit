@@ -38,9 +38,13 @@ This mod is under development. A liquid transfer has been tested between two pla
 
 接收记录会在接收方成功保存游戏后向服务器确认。已经确认的物资在接收方回到较早存档后不会自动补发，需要重新发送。发送方回档可能恢复已经发出的物资，这种情况允许发生。网络中断、异常退出及回档的所有组合尚未完成实测，重要存档建议先备份。
 
+输入端和输出端的配置面板显示连接、缓冲及服务器队列状态。可在面板中两次点击清除当前目标的服务器排队投递；清除不可撤销，只作用于查询到的投递，不清空本地缓冲或已接收物资。输入端只能清除自己发给该目标的队列，输出端可以清除发往该输出端的队列。队列数字包含已接收但尚未存档确认的投递，输出端清除时会跳过这些投递。
+
 Players do not need to be online at the same time: the relay stores pending deliveries. Cargo waits when the output is blocked or inactive, or while the receiving game is paused. The queue is bounded, so the sender waits when it is full. Queued cargo can continue arriving after the sender exits.
 
 The receiver acknowledges deliveries after a successful game save. Confirmed cargo is not automatically resent when the receiving player loads an earlier save; it must be sent again. Rolling back the sender may restore already-sent materials, which is allowed. Not every combination of disconnection, unexpected exit and rollback has been tested; back up important saves before testing.
+
+The input and output panels show connection, buffer and server queue status. Click twice to clear the displayed server queue; this cannot be undone and affects only the listed deliveries, not local buffers or received cargo. Inputs can clear their own deliveries to the selected output; outputs can clear deliveries addressed to them. Queue counts include received deliveries awaiting a save, which are excluded when clearing from the output.
 
 ## 中继服务器 / Relay Server
 
@@ -54,7 +58,11 @@ python relay.py
 
 默认监听 TCP `53573`，并在脚本旁创建 `remote_warp.sqlite3`。服务器控制台记录连接和投递事件。可用 `--host`、`--port` 和 `--database` 覆盖服务器参数；客户端当前把默认服务器 IP 和端口写在源码中，更换服务器需要修改 `src/RelayClient.cs` 并重新编译。
 
+日志同时写入脚本旁的 `remote_warp_relay.log`，按本地日期轮转并保留当天及之前六天；可通过 `--log` 指定日志路径。队列清除功能需要新版客户端和新版中继配合使用。
+
 The default listener is TCP `53573`; `remote_warp.sqlite3` is created beside the script. Connection and delivery events are written to the server console. Use `--host`, `--port` and `--database` to override server settings. The client currently hardcodes its default server IP and port; changing the server requires editing `src/RelayClient.cs` and rebuilding.
+
+Logs are also written to `remote_warp_relay.log` beside the script, rotated by local date and retained for the current day and previous six days. Use `--log` to change the log path. Queue clearing requires both the updated client and relay.
 
 当前中继没有身份验证或加密。连接者可以查看客户端列表及其中的 IP、计算机名和世界信息，也可以冒充客户端或投递物资；请在部署和使用时考虑这一限制。
 

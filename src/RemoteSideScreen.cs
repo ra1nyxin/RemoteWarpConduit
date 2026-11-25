@@ -37,6 +37,8 @@ namespace RemoteWarpConduit
         private Font font;
         private float nextRefresh;
         private string notice;
+        private bool confirmClear;
+        private JObject lastClearResult;
 
         public override bool IsValidForTarget(GameObject go)
         {
@@ -44,7 +46,7 @@ namespace RemoteWarpConduit
         }
 
         public override string GetTitle() { return "远程供给传送器"; }
-        public override void SetTarget(GameObject go) { target = go; notice = null; EnsureBuilt(); Refresh(); }
+        public override void SetTarget(GameObject go) { target = go; notice = null; confirmClear = false; EnsureBuilt(); Refresh(); }
         public override void ClearTarget() { target = null; }
 
         private void Update()
@@ -93,7 +95,13 @@ namespace RemoteWarpConduit
             if (target == null) return;
             RemoteRuntime runtime = RemoteRuntime.Instance;
             RelayClient client = runtime != null ? runtime.Client : null;
+            if (runtime != null && runtime.QueueClearResult != null && runtime.QueueClearResult != lastClearResult)
+            {
+                lastClearResult = runtime.QueueClearResult;
+                notice = "服务器已清除 " + (int?)lastClearResult["cleared"] + " 条排队投递";
+            }
             AddLabel(client != null && client.Connected ? "服务器已连接  " + (client.LatencyMs >= 0 ? client.LatencyMs + " ms" : "等待心跳") : "服务器未连接", 25);
+            if (Time.timeScale <= 0f) AddLabel("游戏暂停：物资传输等待中", 25);
             if (!string.IsNullOrEmpty(notice)) AddLabel(notice, 40);
             RemoteSenderBuffers sender = target.GetComponent<RemoteSenderBuffers>();
             if (sender == null)
@@ -101,10 +109,21 @@ namespace RemoteWarpConduit
                 Activatable activation = target.GetComponent<Activatable>();
                 AddLabel(activation != null && activation.IsActivated ? "输出端已激活，可接收远程物资" : "输出端未激活", 30);
                 RemoteReceiverBuffers receiver = target.GetComponent<RemoteReceiverBuffers>();
-                if (receiver != null) AddLabel("输出端: " + receiver.ReceiverId, 30);
+                if (receiver != null)
+                {
+                    AddLabel("输出端: " + receiver.ReceiverId, 30);
+                    AddLabel("本地缓冲 气/液/固: " + Mass(receiver.gas) + " / " + Mass(receiver.liquid) + " / " + Mass(receiver.solid) + " kg", 30);
+                    AddLabel("已接收、等待存档确认: " + receiver.AwaitingSave + " / 256", 30);
+                    ShowQueue(runtime, client, "receiver", client != null ? client.Id : null, receiver.WorldId, receiver.ReceiverId, receiver);
+                }
                 return;
             }
             AddLabel(sender.HasRemoteTarget ? "当前目标: " + sender.targetClient + " / " + sender.targetReceiver : "当前模式: 原版星球传送", 45);
+            Activatable senderActivation = target.GetComponent<Activatable>();
+            AddLabel(senderActivation != null && senderActivation.IsActivated ? "输入端已激活" : "输入端未激活", 25);
+            AddLabel("本地缓冲 气/液/固: " + Mass(sender.gas) + " / " + Mass(sender.liquid) + " / " + Mass(sender.solid) + " kg", 30);
+            AddLabel(string.IsNullOrEmpty(sender.pendingId) ? "待发送: 无" : "待发送: 1 条（等待服务器确认）", 30);
+            if (sender.HasRemoteTarget) ShowQueue(runtime, client, "sender", sender.targetClient, sender.targetWorld, sender.targetReceiver, null);
             AddButton("切换到原版传送", delegate { Select(sender, null, null, null); });
             int count = 0;
             if (runtime != null && client != null)
@@ -132,8 +151,38 @@ namespace RemoteWarpConduit
 
         private void Select(RemoteSenderBuffers sender, string id, string world, string receiver)
         {
+            confirmClear = false;
             notice = sender.SelectTarget(id, world, receiver) ? "已切换传送目标" : "远程缓冲或待发送物资未清空，无法切换";
             Refresh();
+        }
+
+        private static string Mass(Storage storage) { return storage == null ? "--" : storage.MassStored().ToString("0.##"); }
+
+        private void ShowQueue(RemoteRuntime runtime, RelayClient client, string role, string targetId, string world, string receiverId, RemoteReceiverBuffers receiver)
+        {
+            if (runtime == null || client == null || !client.Connected || string.IsNullOrEmpty(world) || string.IsNullOrEmpty(receiverId)) return;
+            JObject request = new JObject { ["type"] = "queue_status", ["role"] = role, ["target"] = targetId, ["world_id"] = world, ["receiver_id"] = receiverId };
+            client.Send(request);
+            JObject status = runtime.QueueStatus;
+            if (status == null || (string)status["role"] != role || (string)status["target"] != targetId || (string)status["world_id"] != world || (string)status["receiver_id"] != receiverId)
+            {
+                AddLabel("服务器队列: 查询中", 25);
+                return;
+            }
+            JObject counts = status["counts"] as JObject;
+            JArray ids = status["ids"] as JArray;
+            if (counts == null || ids == null) return;
+            AddLabel("服务器队列: " + (int?)status["total"] + " 条  气/液/固: " + (int?)counts["gas"] + " / " + (int?)counts["liquid"] + " / " + (int?)counts["solid"], 35);
+            AddLabel("清除仅影响当前目标的服务器队列，已接收和本地缓冲不受影响。", 40);
+            AddButton(confirmClear ? "确认清除当前服务器队列" : "清除服务器队列...", delegate {
+                if (!confirmClear) { confirmClear = true; Refresh(); return; }
+                confirmClear = false;
+                JArray selected = receiver != null ? receiver.ClearableIds(ids) : new JArray(ids);
+                if (receiver != null) receiver.BeginClear(selected);
+                client.Send(new JObject { ["type"] = "queue_clear", ["role"] = role, ["target"] = targetId, ["world_id"] = world, ["receiver_id"] = receiverId, ["ids"] = selected });
+                notice = "正在清除服务器队列";
+                Refresh();
+            });
         }
 
         private Text AddLabel(string value, float height)
