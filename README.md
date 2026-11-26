@@ -8,6 +8,44 @@ An *Oxygen Not Included: Spaced Out!* mod that sends resources between separate 
 
 This mod is under development. A liquid transfer has been tested between two players; other material states, reconnection and save rollback still need further testing.
 
+## 工作流程 / How It Works
+
+```mermaid
+flowchart TD
+    A["玩家进入各自的存档<br/>Players load their colonies"] --> B["客户端连接中继并发布输出端信息<br/>Clients connect and publish outputs"]
+    B --> C{"输入端选择目标<br/>Input destination"}
+    C -->|"原版 / Vanilla"| D["使用原版星球间传送<br/>Use the vanilla teleporter"]
+    C -->|"远程输出端 / Remote output"| E["气体、液体或固体进入本地缓冲<br/>Gas, liquid or solid enters the local buffer"]
+    E --> F{"物资是否支持<br/>Supported material?"}
+    F -->|"否 / No"| G["留在输入端缓冲<br/>Remains in the input buffer"]
+    F -->|"是 / Yes"| H["打包元素、质量、温度与病菌<br/>Package element, mass, temperature and germs"]
+    H --> I{"连接和队列是否可用<br/>Connected and queue available?"}
+    I -->|"否 / No"| J["等待连接或队列空位，然后重试<br/>Wait for connection or queue space and retry"]
+    J --> I
+    I -->|"是 / Yes"| K["中继写入 SQLite 队列并确认提交<br/>Relay stores delivery in SQLite and confirms submission"]
+    K --> L{"接收方能否查询<br/>Can the receiver poll?"}
+    L -->|"离线、暂停或未激活 / Offline, paused or inactive"| M["投递留在服务器队列中等待<br/>Delivery waits in the server queue"]
+    M --> L
+    L -->|"可以 / Yes"| N["按目标输出端和物态查询<br/>Poll by destination and phase"]
+    N --> O{"元素、物态和病菌可识别<br/>Element, phase and disease valid?"}
+    O -->|"否 / No"| P["无法接收，投递留在队列<br/>Cannot receive; delivery stays queued"]
+    O -->|"是 / Yes"| Q{"输出缓冲有足够空间<br/>Enough output buffer space?"}
+    Q -->|"否 / No"| R["等待管道或轨道排出物资<br/>Wait for the pipe or rail to drain"]
+    R --> N
+    Q -->|"是 / Yes"| S["放入输出端缓冲，记录投递 ID<br/>Place cargo in output buffer and record delivery ID"]
+    S --> T["物资流向管道或运输轨道<br/>Cargo exits through pipes or rail"]
+    S --> U{"接收方成功存档<br/>Receiver saved successfully?"}
+    U -->|"否 / No"| V["等待存档，服务器保留投递<br/>Wait for save; relay retains delivery"]
+    V --> U
+    U -->|"是 / Yes"| W["客户端确认，服务器标记为已送达<br/>Client acknowledges; relay marks delivered"]
+    P --> X["面板查询队列并两次确认清除<br/>Inspect queue and confirm clearing twice"]
+    X --> Y["清除所选范围内的服务器排队投递<br/>Clear queued deliveries in the selected scope"]
+```
+
+气体、液体和固体分别查询；无法识别的投递可能阻塞同一输出端的同一物态。队列清除的范围和存档行为见下文。
+
+Gas, liquid and solid are polled separately. An unrecognized delivery can block later deliveries of the same phase at that output. See below for queue clearing and save behavior.
+
 ## 支持的物资 / Supported Materials
 
 - 普通气体、液体和固体元素，传递质量、温度、病菌种类和数量。
